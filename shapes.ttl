@@ -1,0 +1,50 @@
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex:    <https://example.org/legal-kg#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:ObligationShape
+    a sh:NodeShape ;
+    sh:targetClass ex:LegalObligation ;
+    
+    # 1. Must have exactly 1 Title
+    sh:property [
+        sh:path ex:obligationTitle ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "An obligation must have exactly one string title." ;
+    ] ;
+
+    # 2. Must have exactly 1 Assigned Party (URI node)
+    sh:property [
+        sh:path ex:assignedTo ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "Obligation must be assigned to a specific legal entity URI." ;
+    ] ;
+
+    # 3. Must have a valid severity rating
+    sh:property [
+        sh:path ex:severityLevel ;
+        sh:in ( "LOW" "MEDIUM" "HIGH" "CRITICAL" ) ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "Severity must be one of: LOW, MEDIUM, HIGH, CRITICAL." ;
+    ] ;
+
+    # 4. Must specify a valid ISO date deadline
+    sh:property [
+        sh:path ex:deadlineDate ;
+        sh:datatype xsd:date ;
+        sh:minCount 1 ;
+        sh:message "A valid deadline date (xsd:date) is mandatory." ;
+    ] ;
+    # 5. Must specify a valid ISO date deadline
+    sh:property [
+        sh:path ex:deadlineDate ;
+        sh:datatype xsd:date ;
+        sh:minCount 1 ;
+        sh:message "A valid deadline date (xsd:date) is mandatory." ;
+    ] .

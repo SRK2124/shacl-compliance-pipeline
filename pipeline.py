@@ -1,0 +1,175 @@
+"""
+LegalKG: Automated Legal Document Graph Construction & SHACL Validation Pipeline.
+Designed as a proof-of-concept for RDF, SPARQL, and SHACL integration.
+"""
+
+from rdflib import Graph, Literal, Namespace, RDF, XSD, URIRef
+from pyshacl import validate
+import json
+import time
+import re
+
+# Define Namespaces
+EX = Namespace("https://example.org/legal-kg#")
+SCHEMA = Namespace("https://schema.org/")
+
+def mock_llm_nlp_extraction():
+    """
+    Simulates structured output from an LLM/NER pipeline parsing legal clauses.
+    Contains both valid instances and one intentionally invalid instance to test SHACL.
+    """
+    return [
+        {
+            "id": "ob_001",
+            "title": "Data Breach Notification to Supervisory Authority",
+            "party": "TechCorp_Europe",
+            "severity": "CRITICAL",
+            "deadline": "2026-11-01",
+            "article": "GDPR_Art33"
+        },
+        {
+            "id": "ob_002",
+            "title": "Conduct Annual Data Protection Impact Assessment",
+            "party": "TechCorp_Europe",
+            "severity": "MEDIUM",
+            "deadline": "2026-12-31",
+            "article": "GDPR_Art35"
+        },
+        # Intentional anomaly for SHACL test: Invalid severity level and missing party
+        {
+            "id": "ob_003_anomalous",
+            "title": "Unassigned Compliance Task",
+            "party": None,
+            "severity": "UNKNOWN_SEVERITY",  # Violates sh:in constraint
+            "deadline": "2027-01-15",
+            "article": "GDPR_Art30"
+        }
+    ]
+
+def build_rdf_graph(extracted_records) -> Graph:
+    """Populates an RDF Graph from structured legal extractions."""
+    g = Graph()
+    g.bind("ex", EX)
+    g.bind("schema", SCHEMA)
+
+    # Regex to check if a date perfectly matches YYYY-MM-DD
+    date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    for item in extracted_records:
+        ob_uri = EX[item["id"]]
+        
+        g.add((ob_uri, RDF.type, EX.LegalObligation))
+        
+        # Safely convert title to string in case the AI hallucinated an integer
+        title_val = str(item.get("title", ""))
+        g.add((ob_uri, EX.obligationTitle, Literal(title_val, datatype=XSD.string)))
+        
+        g.add((ob_uri, EX.severityLevel, Literal(item.get("severity", ""))))
+        g.add((ob_uri, EX.referencesArticle, EX[item.get("article", "")]))
+
+        deadline = str(item.get("deadline", ""))
+        
+        if date_pattern.match(deadline):
+            # It's a valid date, safely tell rdflib to parse it as XSD.date
+            g.add((ob_uri, EX.deadlineDate, Literal(deadline, datatype=XSD.date)))
+        else:
+            # It's a hallucinated date (like "Next Friday")
+            # Tell rdflib it is just a string so it doesn't crash. 
+            # SHACL will flag this as a datatype violation later!
+            g.add((ob_uri, EX.deadlineDate, Literal(deadline, datatype=XSD.string)))
+
+        # Handle the assigned party safely
+        party = item.get("party")
+        if party:
+            party_uri = EX[party]
+            g.add((party_uri, RDF.type, EX.LegalEntity))
+            g.add((ob_uri, EX.assignedTo, party_uri))
+
+    return g
+
+def validate_shacl(data_graph: Graph, shapes_path: str):
+    """Executes SHACL validation using PySHACL."""
+    print("\n--- [1] RUNNING SHACL VALIDATION ENGINE ---")
+    
+    conforms, report_graph, report_text = validate(
+        data_graph=data_graph,
+        shacl_graph=shapes_path,
+        inference='rdfs',
+        abort_on_first=False,
+        meta_shacl=False,
+        debug=False
+    )
+    
+    print(f"Conformance Status: {'CONFORMS (Valid)' if conforms else 'VIOLATIONS FOUND (Expected)'}")
+    print("\nSHACL Human-Readable Summary:")
+    print(report_text[:1200]) # Print first section of report
+    return conforms
+
+def execute_sparql_queries(data_graph: Graph):
+    """Runs analytical SPARQL queries over the valid knowledge graph."""
+    print("\n--- [2] EXECUTING SPARQL QUERIES ---")
+
+    # Query 1: Extract high-priority obligations grouped by party
+    sparql_query = """
+    PREFIX ex: <https://example.org/legal-kg#>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+    SELECT ?party ?title ?severity ?deadline
+    WHERE {
+        ?obligation a ex:LegalObligation ;
+                    ex:obligationTitle ?title ;
+                    ex:severityLevel ?severity ;
+                    ex:deadlineDate ?deadline ;
+                    ex:assignedTo ?party .
+        FILTER (?severity IN ("CRITICAL", "HIGH"))
+    }
+    ORDER BY ?deadline
+    """
+
+    print("Query: Find all CRITICAL / HIGH obligations and assigned entities:")
+    results = data_graph.query(sparql_query)
+    
+    for row in results:
+        party_name = row.party.split("#")[-1]
+        print(f" -> Party: {party_name} | Priority: {row.severity} | Due: {row.deadline} | Task: {row.title}")
+
+if __name__ == "__main__":
+    print("--- Loading Large Scale Dataset ---")
+    
+    # 1. Load the massive dataset generated by our script
+    with open("large_extracted_data.json", "r") as f:
+        records = json.load(f)
+    
+    # 2. Build RDF Graph (Benchmarked)
+    start_time = time.time()
+    kg = build_rdf_graph(records)
+    print(f"Generated {len(kg)} RDF triples in {time.time() - start_time:.2f} seconds.")
+
+    # 3. Validate with SHACL (Benchmarked)
+    print("\n--- Running SHACL Validation Engine ---")
+    start_time = time.time()
+    
+    # We set abort_on_first=False so it catches ALL anomalies in the 10,000 records
+    conforms, report_graph, report_text = validate(
+        data_graph=kg,
+        shacl_graph="shapes.ttl",
+        inference='none', # Turn off RDFS inference for speed on large datasets
+        abort_on_first=False
+    )
+    
+    print(f"Validation took {time.time() - start_time:.2f} seconds.")
+    print(f"Graph Conforms: {conforms}")
+    
+    # Count how many violations were found by querying the SHACL report graph
+    violation_count = len(list(report_graph.triples((None, RDF.type, Namespace("http://www.w3.org/ns/shacl#").ValidationResult))))
+    print(f"Total Anomalies Caught by SHACL: {violation_count}")
+    
+    # 4. SPARQL Analytics on the large dataset
+    # Execute SPARQL query (reading from the file we created earlier)
+    with open("queries/compilance_audit.rq", "r") as f:
+        sparql_query = f.read()
+        
+    start_time = time.time()
+    results = kg.query(sparql_query)
+    print(f"\nSPARQL Execution Time: {time.time() - start_time:.2f} seconds.")
+    print(f"Found {len(results)} HIGH/CRITICAL obligations.")

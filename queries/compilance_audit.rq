@@ -1,0 +1,16 @@
+PREFIX ex: <https://example.org/legal-kg#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?party ?title ?severity ?deadline ?article
+WHERE {
+    ?obligation rdf:type ex:LegalObligation ;
+                ex:obligationTitle ?title ;
+                ex:severityLevel ?severity ;
+                ex:deadlineDate ?deadline ;
+                ex:assignedTo ?party ;
+                ex:referencesArticle ?article .
+                
+    FILTER (?severity IN ("CRITICAL", "HIGH"))
+}
+ORDER BY ASC(?deadline)
